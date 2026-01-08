@@ -8,7 +8,7 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 
-#define SERVER_IP   "192.168.0.118"
+#define SERVER_IP   "127.0.0.1"
 #define SERVER_PORT 14423
 #define BUF_SIZE    4096
 

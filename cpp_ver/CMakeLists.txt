@@ -1,3 +1,4 @@
+cmake_minimum_required(VERSION 3.8)
 project(railway_pager_demod)
 
 set(CMAKE_CXX_STANDARD 14)
