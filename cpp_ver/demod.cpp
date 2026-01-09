@@ -262,12 +262,12 @@ void decodeBatch()
     }
 }
 
-void processOneSample(int8_t i, int8_t q) {
-    float fi = ((float) i) / 128.0f;
-    float fq = ((float) q) / 128.0f;
+void processOneSample(float i, float q) {
+    // float fi = ((float) i) / 128.0f;
+    // float fq = ((float) q) / 128.0f;
     // printf("%f %f\n", fi, fq);
 
-    std::complex<float> iq(fi, fq);
+    std::complex<float> iq(i, q);
 
     float deviation;
     double fmDemod = phaseDiscri.phaseDiscriminatorDelta(iq, magsqRaw, deviation);

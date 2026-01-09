@@ -16,6 +16,7 @@ add_executable(railway_pager_demod
         demod.cpp
         demod.h
         dsp/firfilter.cpp
+        dsp/hbfiltertraits.cpp
 )
 
 target_link_libraries(railway_pager_demod
