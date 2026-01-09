@@ -25,6 +25,9 @@ int batch_num;                  // Count of batches in current transmission
 
 double magsqRaw;
 
+float sym_phase = 0.0f;
+const float phaseinc = BAUD_RATE / SAMPLE_RATE;
+
 int pop_cnt(uint32_t cw) {
     int cnt = 0;
     for (int i = 0; i < 32; i++) {
@@ -283,90 +286,95 @@ void processOneSample(float i, float q) {
     bool data = (filt - dc_offset) >= 0.0;
     // printf("filt - dc: %.3f\n", filt - dc_offset);
 
-    if (data != prev_data) {
-        sync_cnt = SAMPLES_PER_SYMBOL / 2; // reset
-    } else {
-        sync_cnt--; // wait until next bit's midpoint
-        
-        if (sync_cnt <= 0) {
-            if (bit_inverted) {
-                data_bit = data;
-            } else {
-                data_bit = !data;
-            }
+	// check transition
+	// MultimonNG的时钟同步机制，float版
+	if (data != prev_data) {
+		if (sym_phase < 0.5f - phaseinc / 2)
+			sym_phase += phaseinc / 8;
+		else
+			sym_phase -= phaseinc / 8;
+	}
 
-            // printf("%d", data_bit);
+	sym_phase += phaseinc;
 
-            bits = (bits << 1) | data_bit;
-            bit_cnt++;
+	if (sym_phase >= 1.0f) {
+		sym_phase -= 1.0f;
 
-            if (bit_cnt > 32) {
-                bit_cnt = 32;
-            }
+		if (bit_inverted) {
+			data_bit = data;
+		} else {
+			data_bit = !data;
+		}
 
-            if (bit_cnt == 32 && !got_SC) {
-                // printf("pop count:     %d\n", pop_cnt(bits ^ POCSAG_SYNCCODE));
-                // printf("pop count inv: %d\n", pop_cnt(bits ^ POCSAG_SYNCCODE_INV));
+		// printf("%d", data_bit);
 
-                if (bits == POCSAG_SYNCCODE) {
-                    got_SC = true;
-                    bit_inverted = false;
-                    printf("\nSync code found\n");
-                } else if (bits == POCSAG_SYNCCODE_INV) {
-                    got_SC = true;
-                    bit_inverted = true;
-                    printf("\nSync code found\n");
-                } else if (pop_cnt(bits ^ POCSAG_SYNCCODE) <= 3) {
-                    uint32_t corrected_cw;
-                    if (bchDecode(bits, corrected_cw) && corrected_cw == POCSAG_SYNCCODE) {
-                        got_SC = true;
-                        bit_inverted = false;
-                        printf("\nSync code found\n");
-                    }
-                    // else printf("\nSync code not found\n");
-                } else if (pop_cnt(bits ^ POCSAG_SYNCCODE_INV) <= 3) {
-                    uint32_t corrected_cw;
-                    if (bchDecode(~bits, corrected_cw) && corrected_cw == POCSAG_SYNCCODE) {
-                        got_SC = true;
-                        bit_inverted = true;
-                        printf("\nSync code found\n");
-                    }
-                    // else printf("\nSync code not found\n");
-                }
+		bits = (bits << 1) | data_bit;
+		bit_cnt++;
 
-                if (got_SC) {
-                    bits = 0;
-                    bit_cnt = 0;
-                    code_words[0] = POCSAG_SYNCCODE;
-                    word_cnt = 1;
-                }
-            } else if (bit_cnt == 32 && got_SC) {
-                uint32_t corrected_cw;
-                code_words_bch_error[word_cnt] = !bchDecode(bits, corrected_cw);
-                code_words[word_cnt] =  corrected_cw;
-                word_cnt++;
+		if (bit_cnt > 32) {
+			bit_cnt = 32;
+		}
 
-                if (word_cnt == 1 && corrected_cw != POCSAG_SYNCCODE) {
-                    got_SC = false;
-                    bit_inverted = false;
-                }
+		if (bit_cnt == 32 && !got_SC) {
+			// printf("pop count:     %d\n", pop_cnt(bits ^ POCSAG_SYNCCODE));
+			// printf("pop count inv: %d\n", pop_cnt(bits ^ POCSAG_SYNCCODE_INV));
 
-                if (word_cnt == PAGERDEMOD_BATCH_WORDS) {
-                    decodeBatch();
-                    batch_num++;
-                    word_cnt = 0;
-                }
+			if (bits == POCSAG_SYNCCODE) {
+				got_SC = true;
+				bit_inverted = false;
+				printf("\nSync code found\n");
+			} else if (bits == POCSAG_SYNCCODE_INV) {
+				got_SC = true;
+				bit_inverted = true;
+				printf("\nSync code found\n");
+			} else if (pop_cnt(bits ^ POCSAG_SYNCCODE) <= 3) {
+				uint32_t corrected_cw;
+				if (bchDecode(bits, corrected_cw) && corrected_cw == POCSAG_SYNCCODE) {
+					got_SC = true;
+					bit_inverted = false;
+					printf("\nSync code found\n");
+				}
+				// else printf("\nSync code not found\n");
+			} else if (pop_cnt(bits ^ POCSAG_SYNCCODE_INV) <= 3) {
+				uint32_t corrected_cw;
+				if (bchDecode(~bits, corrected_cw) && corrected_cw == POCSAG_SYNCCODE) {
+					got_SC = true;
+					bit_inverted = true;
+					printf("\nSync code found\n");
+				}
+				// else printf("\nSync code not found\n");
+			}
 
-                bits = 0;
-                bit_cnt = 0;
+			if (got_SC) {
+				bits = 0;
+				bit_cnt = 0;
+				code_words[0] = POCSAG_SYNCCODE;
+				word_cnt = 1;
+			}
+		} else if (bit_cnt == 32 && got_SC) {
+			uint32_t corrected_cw;
+			code_words_bch_error[word_cnt] = !bchDecode(bits, corrected_cw);
+			code_words[word_cnt] = corrected_cw;
+			word_cnt++;
 
-                is_message_ready = true;
-                printf("Addr: %d | Numeric: %s | Alpha: %s\n", address, numeric_msg.c_str(), alpha_msg.c_str());
-            }
+			if (word_cnt == 1 && corrected_cw != POCSAG_SYNCCODE) {
+				got_SC = false;
+				bit_inverted = false;
+			}
 
-            sync_cnt = SAMPLES_PER_SYMBOL;
-        }
-    }
+			if (word_cnt == PAGERDEMOD_BATCH_WORDS) {
+				decodeBatch();
+				batch_num++;
+				word_cnt = 0;
+			}
 
-    prev_data = data;
+			bits = 0;
+			bit_cnt = 0;
+
+			is_message_ready = true;
+			printf("Addr: %d | Numeric: %s | Alpha: %s\n", address, numeric_msg.c_str(), alpha_msg.c_str());
+		}
+	}
+
+	prev_data = data;
 }
