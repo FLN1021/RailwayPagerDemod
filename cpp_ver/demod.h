@@ -31,6 +31,6 @@ extern Lowpass<double> lowpassBaud;
 extern MovingAverageUtil<double, double, 2048> preambleMovingAverage;
 extern double magsqRaw;
 
-void processOneSample(float i, float q);
+void processOneSample(float i, float q, FILE *file);
 
 #endif

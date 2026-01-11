@@ -22,6 +22,7 @@ int alpha_bit_buffer_bits;           // Count of bits in alpha_bit_buffer
 int parity_errors;                 // Count of parity errors in current message
 int bch_errors;                    // Count of BCH errors in current message
 int batch_num;                  // Count of batches in current transmission
+bool addressValid = false;
 
 double magsqRaw;
 
@@ -186,11 +187,20 @@ uint32_t reverse(uint32_t x)
 void decodeBatch()
 {
     int i = 1;
+	alpha_msg = "";
+	numeric_msg = "";
+	addressValid = false;
     for (int frame = 0; frame < PAGERDEMOD_FRAMES_PER_BATCH; frame++)
     {
         for (int word = 0; word < PAGERDEMOD_CODEWORDS_PER_FRAME; word++)
         {
             bool addressCodeWord = ((code_words[i] >> 31) & 1) == 0;
+
+        	if (addressCodeWord && addressValid) {
+        		printf("Addr: %d | Numeric: %s | Alpha: %s\n", address, numeric_msg.c_str(), alpha_msg.c_str());
+        		printf("[MSG] %s\n", numeric_msg.c_str());
+        		addressValid = false;
+        	}
 
             // Check parity bit
             bool parityError = !evenParity(code_words[i], 1, 31, code_words[i] & 0x1);
@@ -198,6 +208,8 @@ void decodeBatch()
             if (code_words[i] == PAGERDEMOD_POCSAG_IDLECODE)
             {
                 // Idle
+            	numeric_msg = "";
+            	alpha_msg = "";
             }
             else if (addressCodeWord)
             {
@@ -211,6 +223,7 @@ void decodeBatch()
                 alpha_bit_buffer = 0;
                 parity_errors = parityError ? 1 : 0;
                 bch_errors = code_words_bch_error[i] ? 1 : 0;
+            	addressValid = true;
             }
             else
             {
@@ -265,7 +278,7 @@ void decodeBatch()
     }
 }
 
-void processOneSample(float i, float q) {
+void processOneSample(float i, float q, FILE *file) {
     // float fi = ((float) i) / 128.0f;
     // float fq = ((float) q) / 128.0f;
     // printf("%f %f\n", fi, fq);
@@ -277,6 +290,9 @@ void processOneSample(float i, float q) {
     // printf("fmDemod: %.3f\n", fmDemod);
     
     double filt = lowpassBaud.filter(fmDemod);
+
+	// auto fmd = (float) filt;
+	fwrite(&filt, sizeof(double), 1, file);
 
     if (!got_SC) {
         preambleMovingAverage(filt);
@@ -360,6 +376,8 @@ void processOneSample(float i, float q) {
 			if (word_cnt == 1 && corrected_cw != POCSAG_SYNCCODE) {
 				got_SC = false;
 				bit_inverted = false;
+				is_message_ready = true;
+				printf("Addr: %d | Numeric: %s | Alpha: %s\n", address, numeric_msg.c_str(), alpha_msg.c_str());
 			}
 
 			if (word_cnt == PAGERDEMOD_BATCH_WORDS) {
@@ -371,8 +389,8 @@ void processOneSample(float i, float q) {
 			bits = 0;
 			bit_cnt = 0;
 
-			is_message_ready = true;
-			printf("Addr: %d | Numeric: %s | Alpha: %s\n", address, numeric_msg.c_str(), alpha_msg.c_str());
+			printf("CW %x\n",corrected_cw);
+
 		}
 	}
 

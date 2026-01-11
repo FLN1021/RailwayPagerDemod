@@ -51,16 +51,18 @@ int main(void) {
     // }
 
     // Test file output
-    FILE* iqFile = nullptr;
-    iqFile = fopen("test4.c16", "wb");
-    if (!iqFile) {
-        perror("fopen");
-        return false;
-    }
-    struct IQ8 {
-        FixReal i;
-        FixReal q;
-    };
+    // FILE* iqFile = nullptr;
+    // iqFile = fopen("test4.c16", "wb");
+    // if (!iqFile) {
+    //     perror("fopen");
+    //     return false;
+    // }
+    // struct IQ8 {
+    //     FixReal i;
+    //     FixReal q;
+    // };
+    FILE* smpFile = nullptr;
+    smpFile = fopen("test5.f64", "wb");
 
     const int DECIM = 5;
     int decim_counter = 0;
@@ -98,15 +100,15 @@ int main(void) {
             // LPF Channelize
             auto i_ch = channel_filter_i.filter(i_ds);
             auto q_ch = channel_filter_q.filter(q_ds);
-            IQ8 s{i_ch, q_ch};
+            // IQ8 s{i_ch, q_ch};
             // printf("%d %d\n", i_ch, q_ch);
-            fwrite(&s, sizeof(s), 1, iqFile);
+            // fwrite(&s, sizeof(s), 1, iqFile);
 
             // Type Conversion
-            // 这我也不知道该怎么归一化了...随便写个256吧
-            float fi = ((float) i_ch) / 256.0f;
-            float fq = ((float) q_ch) / 256.0f;
-            processOneSample(fi, fq);
+            // 这我也不知道该怎么归一化了...这样可能会偏大，有超过128的
+            float fi = ((float) i_ch) / 128.0f;
+            float fq = ((float) q_ch) / 128.0f;
+            processOneSample(fi, fq, smpFile);
         }
 
         // for (int j = 0; j < n; j += 2) {
