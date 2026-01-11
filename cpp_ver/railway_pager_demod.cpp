@@ -63,6 +63,8 @@ int main(void) {
     // };
     FILE* smpFile = nullptr;
     smpFile = fopen("test5.f64", "wb");
+    FILE* sptFile = nullptr;
+    sptFile = fopen("test5_spt.f64", "wb");
 
     const int DECIM = 5;
     int decim_counter = 0;
@@ -108,7 +110,7 @@ int main(void) {
             // 这我也不知道该怎么归一化了...这样可能会偏大，有超过128的
             float fi = ((float) i_ch) / 128.0f;
             float fq = ((float) q_ch) / 128.0f;
-            processOneSample(fi, fq, smpFile);
+            processOneSample(fi, fq, smpFile, sptFile);
         }
 
         // for (int j = 0; j < n; j += 2) {
@@ -125,8 +127,13 @@ int main(void) {
         // }
 
         if (is_message_ready) {
-            printf("[MSG] %s\n", numeric_msg.c_str());
+            for (int i = 0; i < msg->size(); i++) {
+                printf("Addr: %d | Func: %d | Numeric: %s | Alpha: %s\n",
+                       (*msg)[i].addr, (*msg)[i].func, (*msg)[i].numeric.c_str(), (*msg)[i].alpha.c_str());
+                printf("[MSG] %s\n", (*msg)[i].numeric.c_str());
+            }
             is_message_ready = false;
+            delete msg;
         }
     }
 

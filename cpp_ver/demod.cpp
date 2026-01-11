@@ -15,6 +15,7 @@ uint32_t code_words[PAGERDEMOD_BATCH_WORDS];
 bool code_words_bch_error[PAGERDEMOD_BATCH_WORDS];
 
 std::string numeric_msg, alpha_msg;
+std::vector<pocsag_msg> *msg;
 int function_bits;
 uint32_t address;
 uint32_t alpha_bit_buffer;           // Bit buffer to 7-bit chars spread across codewords
@@ -22,7 +23,7 @@ int alpha_bit_buffer_bits;           // Count of bits in alpha_bit_buffer
 int parity_errors;                 // Count of parity errors in current message
 int bch_errors;                    // Count of BCH errors in current message
 int batch_num;                  // Count of batches in current transmission
-bool addressValid = false;
+// bool addressValid = false;
 
 double magsqRaw;
 
@@ -187,9 +188,10 @@ uint32_t reverse(uint32_t x)
 void decodeBatch()
 {
     int i = 1;
-	alpha_msg = "";
-	numeric_msg = "";
-	addressValid = false;
+	msg = new std::vector<pocsag_msg>(1);
+	// alpha_msg = "";
+	// numeric_msg = "";
+	bool addressValid = false;
     for (int frame = 0; frame < PAGERDEMOD_FRAMES_PER_BATCH; frame++)
     {
         for (int word = 0; word < PAGERDEMOD_CODEWORDS_PER_FRAME; word++)
@@ -197,8 +199,9 @@ void decodeBatch()
             bool addressCodeWord = ((code_words[i] >> 31) & 1) == 0;
 
         	if (addressCodeWord && addressValid) {
-        		printf("Addr: %d | Numeric: %s | Alpha: %s\n", address, numeric_msg.c_str(), alpha_msg.c_str());
-        		printf("[MSG] %s\n", numeric_msg.c_str());
+        		// printf("Addr: %d | Numeric: %s | Alpha: %s\n", address, numeric_msg.c_str(), alpha_msg.c_str());
+        		// printf("[MSG] %s\n", numeric_msg.c_str());
+        		msg->resize(msg->size() + 1);
         		addressValid = false;
         	}
 
@@ -208,15 +211,17 @@ void decodeBatch()
             if (code_words[i] == PAGERDEMOD_POCSAG_IDLECODE)
             {
                 // Idle
-            	numeric_msg = "";
-            	alpha_msg = "";
+            	// numeric_msg = "";
+            	// alpha_msg = "";
             }
             else if (addressCodeWord)
             {
                 // Address
                 function_bits = (code_words[i] >> 11) & 0x3;
+            	(*msg)[msg->size() - 1].func = function_bits;
                 int addressBits = (code_words[i] >> 13) & 0x3ffff;
                 address = (addressBits << 3) | frame;
+            	(*msg)[msg->size() - 1].addr = address;
                 numeric_msg = "";
                 alpha_msg = "";
                 alpha_bit_buffer_bits = 0;
@@ -247,6 +252,7 @@ void decodeBatch()
                     };
                     char numericChar = numericChars[numericBits];
                     numeric_msg.push_back(numericChar);
+                	(*msg)[msg->size() - 1].numeric.push_back(numericChar);
                 }
 
                 // 7-bit ASCII alpnanumeric format
@@ -261,6 +267,7 @@ void decodeBatch()
                     // Add to received message string (excluding, null, end of text, end ot transmission)
                     if (c != 0 && c != 0x3 && c != 0x4) {
                         alpha_msg.push_back(c);
+                    	(*msg)[msg->size() - 1].alpha.push_back(c);
                     }
                     // Remove from bit buffer
                     alpha_bit_buffer_bits -= 7;
@@ -278,7 +285,7 @@ void decodeBatch()
     }
 }
 
-void processOneSample(float i, float q, FILE *file) {
+void processOneSample(float i, float q, FILE *file, FILE *file_spt) {
     // float fi = ((float) i) / 128.0f;
     // float fq = ((float) q) / 128.0f;
     // printf("%f %f\n", fi, fq);
@@ -292,7 +299,7 @@ void processOneSample(float i, float q, FILE *file) {
     double filt = lowpassBaud.filter(fmDemod);
 
 	// auto fmd = (float) filt;
-	fwrite(&filt, sizeof(double), 1, file);
+	// fwrite(&filt, sizeof(double), 1, file);
 
     if (!got_SC) {
         preambleMovingAverage(filt);
@@ -301,20 +308,40 @@ void processOneSample(float i, float q, FILE *file) {
 
     bool data = (filt - dc_offset) >= 0.0;
     // printf("filt - dc: %.3f\n", filt - dc_offset);
+	auto fmd = filt - dc_offset;
+	fwrite(&fmd, sizeof(double), 1, file);
 
 	// check transition
 	// MultimonNG的时钟同步机制，float版
+	// if (data != prev_data) {
+	// 	if (sym_phase < 0.5f - phaseinc / 2)
+	// 		sym_phase += phaseinc / 2;
+	// 	else
+	// 		sym_phase -= phaseinc / 2;
+	// }
 	if (data != prev_data) {
-		if (sym_phase < 0.5f - phaseinc / 2)
-			sym_phase += phaseinc / 8;
-		else
-			sym_phase -= phaseinc / 8;
+		if (sym_phase < 0.5f - phaseinc / 2) {
+			if (!got_SC) {
+				sym_phase += phaseinc / 2;
+			} else {
+				sym_phase += phaseinc;
+			}
+		} else {
+			if (!got_SC) {
+				sym_phase -= phaseinc / 2;
+			} else {
+				sym_phase -= phaseinc;
+			}
+		}
 	}
 
 	sym_phase += phaseinc;
+	double spt;
 
 	if (sym_phase >= 1.0f) {
 		sym_phase -= 1.0f;
+
+		spt = 1;
 
 		if (bit_inverted) {
 			data_bit = data;
@@ -377,7 +404,7 @@ void processOneSample(float i, float q, FILE *file) {
 				got_SC = false;
 				bit_inverted = false;
 				is_message_ready = true;
-				printf("Addr: %d | Numeric: %s | Alpha: %s\n", address, numeric_msg.c_str(), alpha_msg.c_str());
+				// printf("Addr: %d | Numeric: %s | Alpha: %s\n", address, numeric_msg.c_str(), alpha_msg.c_str());
 			}
 
 			if (word_cnt == PAGERDEMOD_BATCH_WORDS) {
@@ -392,7 +419,10 @@ void processOneSample(float i, float q, FILE *file) {
 			printf("CW %x\n",corrected_cw);
 
 		}
+	} else {
+		spt = 0;
 	}
+	fwrite(&spt, sizeof(double), 1, file_spt);
 
 	prev_data = data;
 }

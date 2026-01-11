@@ -26,11 +26,20 @@
 extern bool is_message_ready;
 extern std::string numeric_msg;
 
+struct pocsag_msg {
+    uint32_t i;
+    uint32_t addr;
+    uint16_t func;
+    std::string numeric;
+    std::string alpha;
+};
+extern std::vector<pocsag_msg> *msg;
+
 extern PhaseDiscriminators phaseDiscri;
 extern Lowpass<double> lowpassBaud;
 extern MovingAverageUtil<double, double, 2048> preambleMovingAverage;
 extern double magsqRaw;
 
-void processOneSample(float i, float q, FILE *file);
+void processOneSample(float i, float q, FILE *file, FILE *file_spt);
 
 #endif
