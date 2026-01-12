@@ -10,6 +10,7 @@
 #include "dsp/phasediscri.h"
 #include "dsp/firfilter.h"
 #include "util/movingaverage.h"
+#include <memory>
 
 #define SDR_RX_SCALED 32768.0
 #define SAMPLE_RATE 48000.0
@@ -33,7 +34,7 @@ struct pocsag_msg {
     std::string numeric;
     std::string alpha;
 };
-extern std::vector<pocsag_msg> *msg;
+extern std::unique_ptr<std::vector<pocsag_msg>> msg;
 
 extern PhaseDiscriminators phaseDiscri;
 extern Lowpass<double> lowpassBaud;

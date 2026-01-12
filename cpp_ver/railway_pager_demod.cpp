@@ -128,12 +128,13 @@ int main(void) {
 
         if (is_message_ready) {
             for (int i = 0; i < msg->size(); i++) {
+                if ((*msg)[i].numeric.empty())
+                    continue;
                 printf("Addr: %d | Func: %d | Numeric: %s | Alpha: %s\n",
                        (*msg)[i].addr, (*msg)[i].func, (*msg)[i].numeric.c_str(), (*msg)[i].alpha.c_str());
                 printf("[MSG] %s\n", (*msg)[i].numeric.c_str());
             }
             is_message_ready = false;
-            delete msg;
         }
     }
 

@@ -11,11 +11,13 @@ double dc_offset = 0.0;
 bool prev_data, bit_inverted, data_bit;
 int sync_cnt, bit_cnt = 0, word_cnt = 0;
 uint32_t bits;
-uint32_t code_words[PAGERDEMOD_BATCH_WORDS];
+std::unique_ptr<uint32_t[]> code_words;
 bool code_words_bch_error[PAGERDEMOD_BATCH_WORDS];
+bool drop_corrupted = true;
 
 std::string numeric_msg, alpha_msg;
-std::vector<pocsag_msg> *msg;
+// std::vector<pocsag_msg> *msg;
+std::unique_ptr<std::vector<pocsag_msg>> msg;
 int function_bits;
 uint32_t address;
 uint32_t alpha_bit_buffer;           // Bit buffer to 7-bit chars spread across codewords
@@ -188,51 +190,49 @@ uint32_t reverse(uint32_t x)
 void decodeBatch()
 {
     int i = 1;
-	msg = new std::vector<pocsag_msg>(1);
+	msg = std::make_unique<std::vector<pocsag_msg>>();
 	// alpha_msg = "";
 	// numeric_msg = "";
-	bool addressValid = false;
     for (int frame = 0; frame < PAGERDEMOD_FRAMES_PER_BATCH; frame++)
     {
         for (int word = 0; word < PAGERDEMOD_CODEWORDS_PER_FRAME; word++)
         {
-            bool addressCodeWord = ((code_words[i] >> 31) & 1) == 0;
-
-        	if (addressCodeWord && addressValid) {
-        		// printf("Addr: %d | Numeric: %s | Alpha: %s\n", address, numeric_msg.c_str(), alpha_msg.c_str());
-        		// printf("[MSG] %s\n", numeric_msg.c_str());
-        		msg->resize(msg->size() + 1);
-        		addressValid = false;
+        	if (!code_words[i]) {
+        		i++;
+        		continue;
         	}
+
+            bool addressCodeWord = ((code_words[i] >> 31) & 1) == 0;
 
             // Check parity bit
             bool parityError = !evenParity(code_words[i], 1, 31, code_words[i] & 0x1);
 
-            if (code_words[i] == PAGERDEMOD_POCSAG_IDLECODE)
+            if (pop_cnt(code_words[i] ^ PAGERDEMOD_POCSAG_IDLECODE) <= 3)
             {
                 // Idle
-            	// numeric_msg = "";
-            	// alpha_msg = "";
+            	break;
             }
-            else if (addressCodeWord)
+            if (addressCodeWord)
             {
                 // Address
+            	msg->push_back({});
                 function_bits = (code_words[i] >> 11) & 0x3;
-            	(*msg)[msg->size() - 1].func = function_bits;
+            	msg->back().func = function_bits;
                 int addressBits = (code_words[i] >> 13) & 0x3ffff;
                 address = (addressBits << 3) | frame;
-            	(*msg)[msg->size() - 1].addr = address;
-                numeric_msg = "";
-                alpha_msg = "";
+            	msg->back().addr = address;
+                // numeric_msg = "";
+                // alpha_msg = "";
                 alpha_bit_buffer_bits = 0;
                 alpha_bit_buffer = 0;
                 parity_errors = parityError ? 1 : 0;
                 bch_errors = code_words_bch_error[i] ? 1 : 0;
-            	addressValid = true;
             }
             else
             {
                 // Message - decode as both numeric and ASCII - not all operators use functionBits to indidcate encoding
+            	if (!msg->size())
+            		msg->resize(msg->size() + 1);
                 int messageBits = (code_words[i] >> 11) & 0xfffff;
                 if (parityError) {
                     parity_errors++;
@@ -251,8 +251,8 @@ void decodeBatch()
                         '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '.', 'U', ' ', '-', ')', '('
                     };
                     char numericChar = numericChars[numericBits];
-                    numeric_msg.push_back(numericChar);
-                	(*msg)[msg->size() - 1].numeric.push_back(numericChar);
+                    // numeric_msg.push_back(numericChar);
+                	msg->back().numeric.push_back(numericChar);
                 }
 
                 // 7-bit ASCII alpnanumeric format
@@ -266,8 +266,8 @@ void decodeBatch()
                     c = reverse(c) >> (32-7);
                     // Add to received message string (excluding, null, end of text, end ot transmission)
                     if (c != 0 && c != 0x3 && c != 0x4) {
-                        alpha_msg.push_back(c);
-                    	(*msg)[msg->size() - 1].alpha.push_back(c);
+                        // alpha_msg.push_back(c);
+                    	msg->back().alpha.push_back(c);
                     }
                     // Remove from bit buffer
                     alpha_bit_buffer_bits -= 7;
@@ -391,13 +391,30 @@ void processOneSample(float i, float q, FILE *file, FILE *file_spt) {
 			if (got_SC) {
 				bits = 0;
 				bit_cnt = 0;
+				code_words = std::make_unique<uint32_t[]>(PAGERDEMOD_BATCH_WORDS);
 				code_words[0] = POCSAG_SYNCCODE;
 				word_cnt = 1;
 			}
 		} else if (bit_cnt == 32 && got_SC) {
 			uint32_t corrected_cw;
 			code_words_bch_error[word_cnt] = !bchDecode(bits, corrected_cw);
+			// if (code_words_bch_error[word_cnt]) {
+			// 	if (show_corrupted)
+			// 		code_words[word_cnt] = corrected_cw;
+			// } else {
+			// 	code_words[word_cnt] = corrected_cw;
+			// }
 			code_words[word_cnt] = corrected_cw;
+
+			// 连续两帧纠错失败时中断消息
+			if (drop_corrupted && code_words_bch_error[word_cnt] && code_words_bch_error[word_cnt - 1]) {
+				decodeBatch();
+				batch_num++;
+				word_cnt = 0;
+				got_SC = false;
+				bit_inverted = false;
+			}
+
 			word_cnt++;
 
 			if (word_cnt == 1 && corrected_cw != POCSAG_SYNCCODE) {
