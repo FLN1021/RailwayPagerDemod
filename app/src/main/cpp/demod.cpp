@@ -9,14 +9,13 @@ MovingAverageUtil<double, double, 2048> preambleMovingAverage;
 bool got_SC = false;
 double dc_offset = 0.0;
 bool prev_data, bit_inverted, data_bit;
-int sync_cnt, bit_cnt = 0, word_cnt = 0;
+int bit_cnt = 0, word_cnt = 0;
 uint32_t bits;
 uint32_t code_words[PAGERDEMOD_BATCH_WORDS];
 bool code_words_bch_error[PAGERDEMOD_BATCH_WORDS];
 
-std::string numeric_msg, alpha_msg;
+std::unique_ptr<std::vector<pocsag_msg>> msg; // 这个其实有点激进，可能还有一些问题需要解决
 int function_bits;
-uint32_t address;
 uint32_t alpha_bit_buffer;           // Bit buffer to 7-bit chars spread across codewords
 int alpha_bit_buffer_bits;           // Count of bits in alpha_bit_buffer
 int parity_errors;                 // Count of parity errors in current message
@@ -24,6 +23,9 @@ int bch_errors;                    // Count of BCH errors in current message
 int batch_num;                  // Count of batches in current transmission
 
 double magsqRaw;
+
+float sym_phase = 0.0;
+const float phaseinc = BAUD_RATE / SAMPLE_RATE;
 
 int pop_cnt(uint32_t cw) {
     int cnt = 0;
@@ -183,6 +185,7 @@ uint32_t reverse(uint32_t x)
 void decodeBatch()
 {
     int i = 1;
+    msg = std::make_unique<std::vector<pocsag_msg>>();
     for (int frame = 0; frame < PAGERDEMOD_FRAMES_PER_BATCH; frame++)
     {
         for (int word = 0; word < PAGERDEMOD_CODEWORDS_PER_FRAME; word++)
@@ -192,18 +195,19 @@ void decodeBatch()
             // Check parity bit
             bool parityError = !evenParity(code_words[i], 1, 31, code_words[i] & 0x1);
 
-            if (code_words[i] == PAGERDEMOD_POCSAG_IDLECODE)
+            if (pop_cnt(code_words[i] ^ PAGERDEMOD_POCSAG_IDLECODE) <= 3) // 0x7a89c196貌似也能过bch，不过好像只是错了一位的IDLE
             {
                 // Idle
+                break;
             }
             else if (addressCodeWord)
             {
                 // Address
+                msg->push_back({});
                 function_bits = (code_words[i] >> 11) & 0x3;
+                msg->back().func = function_bits;
                 int addressBits = (code_words[i] >> 13) & 0x3ffff;
-                address = (addressBits << 3) | frame;
-                numeric_msg = "";
-                alpha_msg = "";
+                msg->back().addr = (addressBits << 3) | frame;
                 alpha_bit_buffer_bits = 0;
                 alpha_bit_buffer = 0;
                 parity_errors = parityError ? 1 : 0;
@@ -212,6 +216,8 @@ void decodeBatch()
             else
             {
                 // Message - decode as both numeric and ASCII - not all operators use functionBits to indidcate encoding
+                if (!msg->size())
+                    msg->push_back({});
                 int messageBits = (code_words[i] >> 11) & 0xfffff;
                 if (parityError) {
                     parity_errors++;
@@ -230,7 +236,7 @@ void decodeBatch()
                         '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '.', 'U', ' ', '-', ')', '('
                     };
                     char numericChar = numericChars[numericBits];
-                    numeric_msg.push_back(numericChar);
+                    msg->back().numeric.push_back(numericChar);
                 }
 
                 // 7-bit ASCII alpnanumeric format
@@ -244,7 +250,7 @@ void decodeBatch()
                     c = reverse(c) >> (32-7);
                     // Add to received message string (excluding, null, end of text, end ot transmission)
                     if (c != 0 && c != 0x3 && c != 0x4) {
-                        alpha_msg.push_back(c);
+                        msg->back().alpha.push_back(c);
                     }
                     // Remove from bit buffer
                     alpha_bit_buffer_bits -= 7;
@@ -262,11 +268,9 @@ void decodeBatch()
     }
 }
 
-void processOneSample(int8_t i, int8_t q) {
-    float fi = ((float) i) / 128.0f;
-    float fq = ((float) q) / 128.0f;
+void processOneSample(float i, float q) {
 
-    std::complex<float> iq(fi, fq);
+    std::complex<float> iq(i, q);
 
     float deviation;
     double fmDemod = phaseDiscri.phaseDiscriminatorDelta(iq, magsqRaw, deviation);
@@ -283,88 +287,100 @@ void processOneSample(int8_t i, int8_t q) {
     // printf("filt - dc: %.3f\n", filt - dc_offset);
 
     if (data != prev_data) {
-        sync_cnt = SAMPLES_PER_SYMBOL / 2; // reset
-    } else {
-        sync_cnt--; // wait until next bit's midpoint
-        
-        if (sync_cnt <= 0) {
-            if (bit_inverted) {
-                data_bit = data;
-            } else {
-                data_bit = !data;
-            }
+        /*
+        MultimonNG的时钟同步机制，具体可参考https://github.com/EliasOenal/multimon-ng/blob/master/demod_poc12.c
+        其主要为每sample给符号相位记录值sym_phase加一个增量phaseinc，之每发生位翻转时判断如果sym_phase不等于0.5就加上或减去一个
+        phaseinc/2的偏移量，以确保当sym_phase等于1.0读出时样本位于符号中间。采用微调偏移量而不是像原sdrangel代码那样直接重置符号
+        相位为0.5是因为FSK在实际接收种经常会出现符号中间抖动的情况，低通滤不干净这种抖动，如果因为这种抖动造成的位翻转而重置的话会导致后
+        面的符号丢失同步。
+        MultimonNG原代码中单次偏移量为phaseinc/8，根据其采用的11025hz采样率估算偏移一个符号周期大约需要73.5次偏移。由于这里采样率
+        不同故采用根据估算为偏移一个符号周期需80次偏移的phasinc/2为单次偏移量。
+        */
+        if (sym_phase < 0.5 - phaseinc / 2)
+            sym_phase += phaseinc / 2;
+        else
+            sym_phase -= phaseinc / 2;
+    }
+    sym_phase += phaseinc;
 
-            // printf("%d", data_bit);
+    if (sym_phase >= 1.0) {
+    	sym_phase -= 1.0;
 
-            bits = (bits << 1) | data_bit;
-            bit_cnt++;
+        if (bit_inverted) {
+            data_bit = data;
+        } else {
+            data_bit = !data;
+        }
 
-            if (bit_cnt > 32) {
-                bit_cnt = 32;
-            }
+        // printf("%d", data_bit);
 
-            if (bit_cnt == 32 && !got_SC) {
-                // printf("pop count:     %d\n", pop_cnt(bits ^ POCSAG_SYNCCODE));
-                // printf("pop count inv: %d\n", pop_cnt(bits ^ POCSAG_SYNCCODE_INV));
+        bits = (bits << 1) | data_bit;
+        bit_cnt++;
 
-                if (bits == POCSAG_SYNCCODE) {
+        if (bit_cnt > 32) {
+            bit_cnt = 32;
+        }
+
+        if (bit_cnt == 32 && !got_SC) {
+            // printf("pop count:     %d\n", pop_cnt(bits ^ POCSAG_SYNCCODE));
+            // printf("pop count inv: %d\n", pop_cnt(bits ^ POCSAG_SYNCCODE_INV));
+
+            if (bits == POCSAG_SYNCCODE) {
+                got_SC = true;
+                bit_inverted = false;
+                printf("\nSync code found\n");
+            } else if (bits == POCSAG_SYNCCODE_INV) {
+                got_SC = true;
+                bit_inverted = true;
+                printf("\nSync code found\n");
+            } else if (pop_cnt(bits ^ POCSAG_SYNCCODE) <= 3) {
+                uint32_t corrected_cw;
+                if (bchDecode(bits, corrected_cw) && corrected_cw == POCSAG_SYNCCODE) {
                     got_SC = true;
                     bit_inverted = false;
                     printf("\nSync code found\n");
-                } else if (bits == POCSAG_SYNCCODE_INV) {
+                }
+                // else printf("\nSync code not found\n");
+            } else if (pop_cnt(bits ^ POCSAG_SYNCCODE_INV) <= 3) {
+                uint32_t corrected_cw;
+                if (bchDecode(~bits, corrected_cw) && corrected_cw == POCSAG_SYNCCODE) {
                     got_SC = true;
                     bit_inverted = true;
                     printf("\nSync code found\n");
-                } else if (pop_cnt(bits ^ POCSAG_SYNCCODE) <= 3) {
-                    uint32_t corrected_cw;
-                    if (bchDecode(bits, corrected_cw) && corrected_cw == POCSAG_SYNCCODE) {
-                        got_SC = true;
-                        bit_inverted = false;
-                        printf("\nSync code found\n");
-                    }
-                    // else printf("\nSync code not found\n");
-                } else if (pop_cnt(bits ^ POCSAG_SYNCCODE_INV) <= 3) {
-                    uint32_t corrected_cw;
-                    if (bchDecode(~bits, corrected_cw) && corrected_cw == POCSAG_SYNCCODE) {
-                        got_SC = true;
-                        bit_inverted = true;
-                        printf("\nSync code found\n");
-                    }
-                    // else printf("\nSync code not found\n");
                 }
-
-                if (got_SC) {
-                    bits = 0;
-                    bit_cnt = 0;
-                    code_words[0] = POCSAG_SYNCCODE;
-                    word_cnt = 1;
-                }
-            } else if (bit_cnt == 32 && got_SC) {
-                uint32_t corrected_cw;
-                code_words_bch_error[word_cnt] = !bchDecode(bits, corrected_cw);
-                code_words[word_cnt] =  corrected_cw;
-                word_cnt++;
-
-                if (word_cnt == 1 && corrected_cw != POCSAG_SYNCCODE) {
-                    got_SC = false;
-                    bit_inverted = false;
-                }
-
-                if (word_cnt == PAGERDEMOD_BATCH_WORDS) {
-                    decodeBatch();
-                    batch_num++;
-                    word_cnt = 0;
-                }
-
-                bits = 0;
-                bit_cnt = 0;
-
-                is_message_ready = true;
-                printf("Addr: %d | Numeric: %s | Alpha: %s\n", address, numeric_msg.c_str(), alpha_msg.c_str());
+                // else printf("\nSync code not found\n");
             }
 
-            sync_cnt = SAMPLES_PER_SYMBOL;
+            if (got_SC) {
+                bits = 0;
+                bit_cnt = 0;
+                code_words[0] = POCSAG_SYNCCODE;
+                word_cnt = 1;
+            }
+        } else if (bit_cnt == 32 && got_SC) {
+            uint32_t corrected_cw;
+            code_words_bch_error[word_cnt] = !bchDecode(bits, corrected_cw);
+            code_words[word_cnt] =  corrected_cw;
+            word_cnt++;
+
+            if (word_cnt == 1 && corrected_cw != POCSAG_SYNCCODE) {
+                got_SC = false;
+                bit_inverted = false;
+                is_message_ready = true;
+                // printf("Addr: %d | Numeric: %s | Alpha: %s\n", address, numeric_msg.c_str(), alpha_msg.c_str());
+            }
+
+            if (word_cnt == PAGERDEMOD_BATCH_WORDS) {
+                decodeBatch();
+                batch_num++;
+                word_cnt = 0;
+            }
+
+            bits = 0;
+            bit_cnt = 0;
+
         }
+
     }
 
     prev_data = data;

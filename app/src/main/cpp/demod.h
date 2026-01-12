@@ -6,10 +6,13 @@
 #include <stdint.h>
 #include <string>
 #include <iostream>
+#include <memory>
 
 #include "dsp/phasediscri.h"
 #include "dsp/firfilter.h"
 #include "util/movingaverage.h"
+#include "util/qtypes.h"
+#include "dsp/decimatorsu.h"
 
 #define SDR_RX_SCALED 32768.0
 #define SAMPLE_RATE 48000.0
@@ -24,14 +27,21 @@
 #define PAGERDEMOD_CODEWORDS_PER_FRAME 2
 
 extern bool is_message_ready;
-extern std::string numeric_msg;
-extern uint32_t address;
+
+struct pocsag_msg {
+    uint32_t i;
+    uint32_t addr;
+    uint16_t func;
+    std::string numeric;
+    std::string alpha;
+};
+extern std::unique_ptr<std::vector<pocsag_msg>> msg;
 
 extern PhaseDiscriminators phaseDiscri;
 extern Lowpass<double> lowpassBaud;
 extern MovingAverageUtil<double, double, 2048> preambleMovingAverage;
 extern double magsqRaw;
 
-void processOneSample(int8_t i, int8_t q);
+void processOneSample(float i, float q);
 
 #endif
