@@ -60,17 +60,20 @@ std::string decode_gb2312(const std::string &numeric_field) {
 ParsedMessage p;
 ParsedMessage parseMessage(const std::string &msg) {
     // 简化：用前缀区分地址类型
-    if (msg.find("1234002") != std::string::npos) {
+    if (msg.find("1234002") != std::string::npos && msg.size() > 50) { // 越界检查
         p.vehicleId = msg.substr(15, 8);
-        std::string routeRaw = msg.substr(25, 14);
+        std::string routeRaw = msg.substr(25, 16); // 一共四个字
         std::string latRaw = msg.substr(50, 8);
         std::string lonRaw = msg.substr(41, 9);
 
-        double latitude = std::stod(latRaw.substr(0, 2) + "." + latRaw.substr(2));
-        double longitude = std::stod(lonRaw.substr(0, 3) + "." + lonRaw.substr(3));
+        try { // 防止stod异常字符导致崩溃
+            double latitude = std::stod(latRaw.substr(0, 2) + "." + latRaw.substr(2));
+            double longitude = std::stod(lonRaw.substr(0, 3) + "." + lonRaw.substr(3));
+            p.latitude = std::to_string(latitude);
+            p.longitude = std::to_string(longitude);
+        } catch (const std::invalid_argument& e) {}
+          catch (const std::out_of_range& e) {}
 
-        p.latitude = std::to_string(latitude);
-        p.longitude = std::to_string(longitude);
         p.route = decode_gb2312(routeRaw);
     }
     else if (msg.find("1234000") != std::string::npos) {

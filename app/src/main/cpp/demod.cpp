@@ -216,7 +216,7 @@ void decodeBatch()
             else
             {
                 // Message - decode as both numeric and ASCII - not all operators use functionBits to indidcate encoding
-                if (!msg->size())
+                if (msg->empty())
                     msg->push_back({});
                 int messageBits = (code_words[i] >> 11) & 0xfffff;
                 if (parityError) {

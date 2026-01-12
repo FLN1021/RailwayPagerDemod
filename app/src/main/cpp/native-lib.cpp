@@ -103,6 +103,8 @@ void clientThread(std::string host, int port) {
 
         if (is_message_ready) {
             for (int i = 0; i < msg->size(); i++) {
+                if (msg->at(i).numeric.empty())
+                    continue;
                 std::ostringstream ss;
                 char addr_buf[32];
                 snprintf(addr_buf, sizeof(addr_buf), "%010d ", msg->at(i).addr);  // 10 + 10位补零
