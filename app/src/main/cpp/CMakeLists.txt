@@ -31,6 +31,7 @@ add_library(${CMAKE_PROJECT_NAME} SHARED
         native-lib.cpp
         decodeMessage.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/dsp/firfilter.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/dsp/hbfiltertraits.cpp
         native-lib.cpp)
 
 

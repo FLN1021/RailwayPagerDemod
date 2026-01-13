@@ -62,40 +62,55 @@ void clientThread(std::string host, int port) {
 
     running = true;
 
-    const int DECIM = 5;
-    int decim_counter = 0;
-    uint32_t acc_i = 0, acc_q = 0;
+    // 改用SDRAngel的decimator函数
+    DecimatorsU<qint32, quint8, SDR_RX_SAMP_SZ, 8, 127, true> m_decimatorsIQ;
+    SampleVector m_convertBuffer(BUF_SIZE);
+
+    // 信道滤波器 带宽12.5k
+    Lowpass<FixReal> channel_filter_i, channel_filter_q;
+    channel_filter_i.create(
+        65,
+        SAMPLE_RATE,
+        6250
+    );
+    channel_filter_q.create(
+        65,
+        SAMPLE_RATE,
+        6250
+    );
 
     while (running && (n = read(sockfd, buffer, BUF_SIZE)) > 0) {
 
-        for (int j = 0; j < n; j += 2) {
-            acc_i += buffer[j];
-            acc_q += buffer[j + 1];
-            if (++decim_counter == DECIM) {
-                int8_t i_ds = (int8_t)(((float) acc_i / DECIM) - 128);
-                int8_t q_ds = (int8_t)(((float) acc_q / DECIM) - 128);
-//                char buf[32];
-//                sprintf(buf, "%d %d\n", i_ds, q_ds);
-//                std::ostringstream ss;
-//                ss << buf;
-//                {
-//                    std::lock_guard<std::mutex> lock(msgMutex);
-//                    messageBuffer.push_back(ss.str());
-//                }
-                processOneSample(i_ds, q_ds);
-                acc_i = acc_q = 0;
-                decim_counter = 0;
-            }
+        auto it = m_convertBuffer.begin();
+
+        // 1536ksps/32 = 48ksps，SUP情况下fc + 48k
+        // 固定采样率或许不是好主意，但现在就先这样了...
+        m_decimatorsIQ.decimate32_sup(&it, buffer, BUF_SIZE);
+
+        // 这里有个FLL可能对于没有tcxo的rtlsdr会友好一些...
+
+        for (auto p = m_convertBuffer.begin(); p != it; ++p) {
+            // 信道滤波
+            auto i_ds = channel_filter_i.filter(p->real());
+            auto q_ds = channel_filter_q.filter(p->imag());
+
+            // 类型转换
+            // 这我也不知道该怎么归一化了...先写了个2048，貌似这个值不会让信号强度条溢出
+            float fi = ((float) i_ds) / 2048.0f;
+            float fq = ((float) q_ds) / 2048.0f;
+            processOneSample(fi, fq);
         }
 
         if (is_message_ready) {
-            std::ostringstream ss;
-            char addr_buf[32];
-            snprintf(addr_buf, sizeof(addr_buf), "%010d ", address);  // 10 + 10位补零
-            ss << "[MSG] " << addr_buf << numeric_msg;
-            {
-                std::lock_guard<std::mutex> lock(msgMutex);
-                messageBuffer.push_back(ss.str());
+            for (int i = 0; i < msg->size(); i++) {
+                std::ostringstream ss;
+                char addr_buf[32];
+                snprintf(addr_buf, sizeof(addr_buf), "%010d ", msg->at(i).addr);  // 10 + 10位补零
+                ss << "[MSG] " << addr_buf << msg->at(i).numeric;
+                {
+                    std::lock_guard<std::mutex> lock(msgMutex);
+                    messageBuffer.push_back(ss.str());
+                }
             }
             is_message_ready = false;
         }
